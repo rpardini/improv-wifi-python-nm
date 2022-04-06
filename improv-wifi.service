@@ -1,0 +1,13 @@
+[Unit]
+Description=Improv-Wifi Service
+After=syslog.target dbus.socket bluetooth.target
+Requires=dbus.socket bluetooth.target
+StartLimitIntervalSec=0
+
+[Service]
+SyslogIdentifier=improv-wifi
+ExecStart=/usr/bin/python3 -u /opt/improv-wifi-python-nm/improv-wifi.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
