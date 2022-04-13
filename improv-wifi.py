@@ -22,6 +22,7 @@ IMPROV_STATE_PROVISIONING_BYTES = bytes([0x03])
 IMPROV_STATE_PROVISIONED_BYTES = bytes([0x04])
 
 IMPROV_ERROR_NO_ERROR_BYTES = bytes([0x00])
+IMPROV_ERROR_UNABLE_TO_CONNECT_BYTES = bytes([0x03])
 IMPROV_ERROR_NOT_AUTHORIZED_BYTES = bytes([0x04])
 
 IMPROV_CAPABILITY_SUPPORTS_IDENTIFY = bytes([0x01])
@@ -53,6 +54,13 @@ previous_state = {
 }
 
 
+def get_authorized_or_await_based_on_counter():
+    global global_state
+    if global_state["counter"] > 300:
+        return IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES
+    return IMPROV_STATE_AUTHORIZED_BYTES
+
+
 def publish_changed_if_changed(key, notifier):
     global global_state
     global previous_state
@@ -72,14 +80,19 @@ def do_identify():
     print("Done calling identify script")
 
 
-async def get_wifi_status():
+def get_wifi_status():
+    return_code = get_wifi_status_raw()
+    if return_code == 0:
+        return True
+    return False
+
+
+def get_wifi_status_raw():
     print("Getting wifi status")
     proc = subprocess.Popen(["/usr/bin/bash", "/usr/local/sbin/improv-status.sh"], shell=False, close_fds=True)
     return_code = proc.wait(timeout=1)  # 2-second timeout to get status
     print("status return code:", return_code)
-    if return_code == 0:
-        return True
-    return False
+    return return_code
 
 
 async def do_connect(ssid, password):
@@ -142,6 +155,18 @@ class ImprovWifiService(Service):
     @machine_uuid.descriptor("BAB2", DescFlags.READ)
     def machine_uuid_descriptor(self, options):
         return bytes("BABE, read-only, returns the UUID.", "utf-8")
+
+    # ### Extra characteristics for network state ####
+    @characteristic("DEAD", CharFlags.READ)
+    def network_state(self, options):
+        print("Got a call for network_state")
+        status_bytes = bytes([get_wifi_status_raw()])
+        print("Got a call for network_state, result '{}'".format(status_bytes))
+        return status_bytes
+
+    @network_state.descriptor("DEA2", DescFlags.READ)
+    def network_state_descriptor(self, options):
+        return bytes("DEAD, read-only, returns the networking state.", "utf-8")
 
     # A debugging thing, always increasing counter, we can notify on..
     @characteristic("BEEF", CharFlags.READ | CharFlags.NOTIFY)
@@ -228,32 +253,32 @@ async def main():
 
         # Reset the status back to normal after a certain amount of loops.
         if global_state["reset_status_after_counter"] != 0:
-            print("Should reset status after counter: {}".format(global_state["reset_status_after_counter"]))
+            print("Should reset status after counter: {}, current counter {}".format(
+                global_state["reset_status_after_counter"], global_state["counter"]))
             if global_state["counter"] > global_state["reset_status_after_counter"]:
                 print("Resetting status after counter: {}".format(global_state["counter"]))
                 global_state["reset_status_after_counter"] = 0
                 global_state["command"] = IMPROV_NO_COMMAND
-                global_state["state"] = IMPROV_STATE_AUTHORIZED_BYTES  # @TODO: timeout?
-                global_state["error"] = IMPROV_ERROR_NO_ERROR_BYTES
+                global_state["state"] = get_authorized_or_await_based_on_counter()
                 global_state["result"] = IMPROV_RESULT_NONE_BYTES
 
         if global_state["operation"] == "provisioning":
             # If we're provisioning, check the status.
             print("Checking provisioning status...")
             global_state["loops_after_provisioning_started"] += 1
-            if await get_wifi_status():
+            if get_wifi_status():
                 print("Provisioning successful!")
                 global_state["state"] = IMPROV_STATE_PROVISIONED_BYTES
                 global_state["result"] = IMPROV_RESULT_OK_EMPTY_BYTES
+                global_state["error"] = IMPROV_ERROR_NO_ERROR_BYTES
                 global_state["operation"] = "none"
-                global_state["reset_status_after_counter"] = global_state["counter"] + 30
+                # Will stay in this state. To reprovision, user will have to reboot.
             else:
                 if global_state["loops_after_provisioning_started"] > 10:
-                    print("Provisioning failed! (Not authorized)")
-                    global_state["state"] = IMPROV_STATE_AUTHORIZED_BYTES
-                    global_state["error"] = IMPROV_ERROR_NOT_AUTHORIZED_BYTES
+                    print("Provisioning failed! (Unable to connect to WiFi)")
+                    global_state["error"] = IMPROV_ERROR_UNABLE_TO_CONNECT_BYTES
                     global_state["operation"] = "none"
-                    global_state["reset_status_after_counter"] = global_state["counter"] + 10
+                    global_state["reset_status_after_counter"] = global_state["counter"] + 15
 
         if global_state["command"]["command"] != "none":
             print("Command received!!!!: {}".format(global_state["command"]))
@@ -276,7 +301,6 @@ async def main():
 
             global_state["command"] = IMPROV_NO_COMMAND
 
-        # Publish everything as notifications.
         # Publish changed attributes as notifications, but only when they actually changed.
         publish_changed_if_changed("debugging", improv_wifi_service.debugging)
         publish_changed_if_changed("error", improv_wifi_service.error_state)
