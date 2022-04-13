@@ -166,7 +166,11 @@ class ImprovWifiService(Service):
 
     @network_state.descriptor("DEA2", DescFlags.READ)
     def network_state_descriptor(self, options):
-        return bytes("DEAD, read-only, returns the networking state.", "utf-8")
+        return bytes(
+            "Networking state; 0=WifiClient configured+connected; 1=Wifi configured, but not connected. 10/11 same "
+            "for Hotspot. 55=unknown.",
+            "utf-8"
+        )
 
     # A debugging thing, always increasing counter, we can notify on..
     @characteristic("BEEF", CharFlags.READ | CharFlags.NOTIFY)
