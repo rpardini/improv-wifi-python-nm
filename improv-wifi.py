@@ -28,6 +28,7 @@ IMPROV_CAPABILITY_SUPPORTS_IDENTIFY = bytes([0x01])
 
 IMPROV_COMMAND_IDENTIFY_BYTES = bytes([0x02, 0x00, 0x02])
 
+IMPROV_RESULT_NONE_BYTES = bytes([0x00, 0x00, 0x00])
 IMPROV_RESULT_OK_EMPTY_BYTES = bytes([0x01, 0x00, 0x01])
 
 IMPROV_NO_COMMAND = {"command": "none"}
@@ -36,13 +37,33 @@ global_state = {
     "command": IMPROV_NO_COMMAND,
     "state": IMPROV_STATE_AUTHORIZED_BYTES,
     "error": IMPROV_ERROR_NO_ERROR_BYTES,
-    "result": bytes("no result yet", "utf-8"),
-    "counter": 0,
+    "result": IMPROV_RESULT_NONE_BYTES,
     "debugging": bytes("no debugging yet", "utf-8"),
+    "counter": 0,
     "operation": "none",
     "loops_after_provisioning_started": 0,
     "reset_status_after_counter": 0
 }
+
+previous_state = {
+    "state": None,
+    "error": None,
+    "result": None,
+    "debugging": None
+}
+
+
+def publish_changed_if_changed(key, notifier):
+    global global_state
+    global previous_state
+    current_value = global_state[key]
+    previous_value = previous_state[key]
+    if current_value != previous_value:
+        if key != "debugging":  # do not overspam with debugging info
+            print("Publishing changed key '{}' to new value '{}' changed from previous '{}'".format(key, current_value,
+                                                                                                    previous_value))
+        previous_state[key] = current_value
+        notifier.changed(current_value)
 
 
 def do_identify():
@@ -214,7 +235,7 @@ async def main():
                 global_state["command"] = IMPROV_NO_COMMAND
                 global_state["state"] = IMPROV_STATE_AUTHORIZED_BYTES  # @TODO: timeout?
                 global_state["error"] = IMPROV_ERROR_NO_ERROR_BYTES
-                global_state["result"] = bytes("no result yet", "utf-8")
+                global_state["result"] = IMPROV_RESULT_NONE_BYTES
 
         if global_state["operation"] == "provisioning":
             # If we're provisioning, check the status.
@@ -256,12 +277,11 @@ async def main():
             global_state["command"] = IMPROV_NO_COMMAND
 
         # Publish everything as notifications.
-        improv_wifi_service.error_state.changed(global_state["error"])
-        improv_wifi_service.current_state.changed(global_state["state"])
-        improv_wifi_service.rpc_result.changed(global_state["result"])
-
-        improv_wifi_service.debugging.changed(global_state["debugging"])
-        # print("debugging set to: {}".format(global_state["debugging"]))
+        # Publish changed attributes as notifications, but only when they actually changed.
+        publish_changed_if_changed("debugging", improv_wifi_service.debugging)
+        publish_changed_if_changed("error", improv_wifi_service.error_state)
+        publish_changed_if_changed("result", improv_wifi_service.rpc_result)
+        publish_changed_if_changed("state", improv_wifi_service.current_state)
 
         await asyncio.sleep(1)
 
