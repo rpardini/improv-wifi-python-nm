@@ -39,6 +39,7 @@ global_state = {
     "state": IMPROV_STATE_AUTHORIZED_BYTES,
     "error": IMPROV_ERROR_NO_ERROR_BYTES,
     "result": IMPROV_RESULT_NONE_BYTES,
+    "connect_hotspot": False,
     "debugging": bytes("no debugging yet", "utf-8"),
     "counter": 0,
     "operation": "none",
@@ -80,10 +81,14 @@ def do_identify():
     print("Done calling identify script")
 
 
-def get_wifi_status():
+def get_wifi_status(hotspot):
     return_code = get_wifi_status_raw()
-    if return_code == 0:
-        return True
+    if hotspot:
+        if return_code == 10:
+            return True
+    else:
+        if return_code == 0:
+            return True
     return False
 
 
@@ -126,7 +131,7 @@ def parse_command(value):
         password = data[pass_start:pass_end].decode("utf-8")
 
         print("Decoding done, will connect to wifi SSID '{}' with password '{}'".format(ssid, password))
-        return {"command": "connect", "ssid": ssid, "password": password}
+        return {"command": "connect", "ssid": ssid, "password": password, "hotspot": (ssid == "" and password == "")}
 
     return {"command": "unknown"}
 
@@ -270,7 +275,7 @@ async def main():
             # If we're provisioning, check the status.
             print("Checking provisioning status...")
             global_state["loops_after_provisioning_started"] += 1
-            if get_wifi_status():
+            if get_wifi_status(global_state["connect_hotspot"]):
                 print("Provisioning successful!")
                 global_state["state"] = IMPROV_STATE_PROVISIONED_BYTES
                 global_state["result"] = IMPROV_RESULT_OK_EMPTY_BYTES
@@ -292,6 +297,10 @@ async def main():
                 print("Will connect!")
                 print("SSID: {}".format(global_state["command"]["ssid"]))
                 print("Password: {}".format(global_state["command"]["password"]))
+                print("Hotspot?: {}".format(global_state["command"]["hotspot"]))
+
+                # Mark global state as hotspot if such is the case.
+                global_state["connect_hotspot"] = global_state["command"]["hotspot"]
 
                 # Do the actual provisioning...
                 await do_connect(global_state["command"]["ssid"], global_state["command"]["password"])
