@@ -205,13 +205,13 @@ class ImprovWifiService(Service):
     # Extra characteristic, READ-only, returns a list of available SSIDs, sorted and null-separated and terminated
     @characteristic("B00B", CharFlags.READ)
     def ap_list(self, options):
-        print("Got a call for ap_list")
+        print("Got a call for ap_list, starting...")
         ap_list_bytes = bytes(get_wifi_ap_list(), "utf-8")
         print("Got a call for ap_list, result '{}'".format(ap_list_bytes))
         return ap_list_bytes
 
     @ap_list.descriptor("B002", DescFlags.READ)
-    def network_state_descriptor(self, options):
+    def ap_list_descriptor(self, options):
         return bytes("Null separated/terminated list of available SSIDs in UTF-8. If empty, then no SSIDs available.",
                      "utf-8")
 
