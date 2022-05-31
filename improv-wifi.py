@@ -100,6 +100,31 @@ def get_wifi_status_raw():
     return return_code
 
 
+def get_wifi_ap_list():
+    proc = subprocess.Popen(["/usr/bin/bash", "/usr/local/sbin/improv-listaps.sh"], shell=False, close_fds=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output = proc.communicate()[0].decode("utf-8")  # not absolutely clear this is utf-8
+    print("wifi list output:", output.replace("\n", "\\n"))
+
+    wifi_ap_power_dict = {}  # Dict to store AP -> power pairs
+    lines = output.split("\n")  # Split the lines into array
+
+    for line in lines:  # Loop over the lines
+        line = line.strip()  # trim the line
+        if line == "": continue  # skip empty lines
+        name, power = line.split(":")  # Split the line into name and power
+        power = int(power)  # convert power to int
+        if power > wifi_ap_power_dict.get(name, 0):
+            wifi_ap_power_dict[name] = power  # Update the dict with the new power
+
+    # get an array with the dict keys for the first 25 items
+    to_return_keys = [x[0] for x in (sorted(wifi_ap_power_dict.items(), key=lambda x: x[1], reverse=True)[:25])]
+    print("to_return_keys:", to_return_keys)
+
+    # join the keys with a null byte, plus a null byte at the end
+    return "\0".join(to_return_keys) + "\0"
+
+
 async def do_connect(ssid, password):
     print("Will connect to wifi SSID '{}' with password '{}'".format(ssid, password))
     proc = subprocess.Popen(["/usr/bin/bash", "/usr/local/sbin/improv-config.sh", ssid, password], shell=False,
@@ -176,6 +201,19 @@ class ImprovWifiService(Service):
             "for Hotspot. 55=unknown.",
             "utf-8"
         )
+
+    # Extra characteristic, READ-only, returns a list of available SSIDs, sorted and null-separated and terminated
+    @characteristic("B00B", CharFlags.READ)
+    def ap_list(self, options):
+        print("Got a call for ap_list")
+        ap_list_bytes = bytes(get_wifi_ap_list(), "utf-8")
+        print("Got a call for ap_list, result '{}'".format(ap_list_bytes))
+        return ap_list_bytes
+
+    @ap_list.descriptor("B002", DescFlags.READ)
+    def network_state_descriptor(self, options):
+        return bytes("Null separated/terminated list of available SSIDs in UTF-8. If empty, then no SSIDs available.",
+                     "utf-8")
 
     # A debugging thing, always increasing counter, we can notify on..
     @characteristic("BEEF", CharFlags.READ | CharFlags.NOTIFY)
