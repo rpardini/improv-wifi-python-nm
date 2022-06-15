@@ -112,7 +112,8 @@ def get_wifi_ap_list():
     for line in lines:  # Loop over the lines
         line = line.strip()  # trim the line
         if line == "": continue  # skip empty lines
-        name, power = line.split(":")  # Split the line into name and power
+        name, power = line.replace("\\:", "--escapedcolon--").split(":")  # Split the line into name and power
+        name = name.replace("--escapedcolon--", ":")
         power = int(power)  # convert power to int
         if power > wifi_ap_power_dict.get(name, 0):
             wifi_ap_power_dict[name] = power  # Update the dict with the new power
