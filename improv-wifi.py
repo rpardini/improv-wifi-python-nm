@@ -57,7 +57,7 @@ previous_state = {
 
 def get_authorized_or_await_based_on_counter():
     global global_state
-    if global_state["counter"] > 300:
+    if global_state["counter"] > (60 * 5):  # 5 Minutes...
         return IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES
     return IMPROV_STATE_AUTHORIZED_BYTES
 
@@ -71,6 +71,8 @@ def publish_changed_if_changed(key, notifier):
         if key != "debugging":  # do not overspam with debugging info
             print("Publishing changed key '{}' to new value '{}' changed from previous '{}'".format(key, current_value,
                                                                                                     previous_value))
+        if key == "state":
+            print("State changed from '{}' to '{}'".format(previous_value, current_value))
         previous_state[key] = current_value
         notifier.changed(current_value)
 
@@ -127,11 +129,11 @@ def get_wifi_ap_list():
 
 
 async def do_connect(ssid, password):
-    print("Will connect to wifi SSID '{}' with password '{}'".format(ssid, password))
+    print("Will connect to wifi SSID '{}' with password length '{}'".format(ssid, len(password)))
     proc = subprocess.Popen(["/usr/bin/bash", "/usr/local/sbin/improv-config.sh", ssid, password], shell=False,
                             close_fds=True)
     print("return code:", proc.wait())
-    print("Done wifi provisioning with SSID '{}' and password '{}'".format(ssid, password))
+    print("Done wifi provisioning with SSID '{}' and password length '{}'".format(ssid, len(password)))
 
 
 def parse_command(value):
@@ -156,7 +158,7 @@ def parse_command(value):
         ssid = data[ssid_start:ssid_end].decode("utf-8")
         password = data[pass_start:pass_end].decode("utf-8")
 
-        print("Decoding done, will connect to wifi SSID '{}' with password '{}'".format(ssid, password))
+        print("Decoding done, will connect to wifi SSID '{}' with password length '{}'".format(ssid, len(password)))
         return {"command": "connect", "ssid": ssid, "password": password, "hotspot": (ssid == "" and password == "")}
 
     return {"command": "unknown"}
@@ -259,10 +261,9 @@ class ImprovWifiService(Service):
     @characteristic("00467768-6228-2272-4663-277478268003", CharFlags.WRITE).setter
     def rpc_command(self, value, options):
         print("Got a write call for rpc_command")
-        print("rpc_command value:", value)
         global global_state
         global_state["command"] = parse_command(value)
-        print("Command parsed: {}".format(global_state["command"]))
+        print("Command parsed: {}".format(global_state["command"]["command"]))
 
 
 async def main():
@@ -298,6 +299,7 @@ async def main():
         # First, increase the debugging counter and set the debugging characteristic.
         global_state["counter"] += 1
         global_state["debugging"] = bytes("debugging {}".format(global_state["counter"]), "utf-8")
+        set_state_via_timeout = True
 
         # Reset the status back to normal after a certain amount of loops.
         if global_state["reset_status_after_counter"] != 0:
@@ -307,11 +309,13 @@ async def main():
                 print("Resetting status after counter: {}".format(global_state["counter"]))
                 global_state["reset_status_after_counter"] = 0
                 global_state["command"] = IMPROV_NO_COMMAND
-                global_state["state"] = get_authorized_or_await_based_on_counter()
                 global_state["result"] = IMPROV_RESULT_NONE_BYTES
+                global_state["error"] = IMPROV_ERROR_NO_ERROR_BYTES
+                set_state_via_timeout = True  # Yes, reset the state based on the timer...
 
         if global_state["operation"] == "provisioning":
             # If we're provisioning, check the status.
+            set_state_via_timeout = False  # don't change the state later, we're provisioning.
             print("Checking provisioning status...")
             global_state["loops_after_provisioning_started"] += 1
             if get_wifi_status(global_state["connect_hotspot"]):
@@ -329,29 +333,42 @@ async def main():
                     global_state["reset_status_after_counter"] = global_state["counter"] + 15
 
         if global_state["command"]["command"] != "none":
-            print("Command received!!!!: {}".format(global_state["command"]))
+            print("Command received!!!!: {}".format(global_state["command"]["command"]))
             if global_state["command"]["command"] == "identify":
                 do_identify()
             elif global_state["command"]["command"] == "connect":
-                print("Will connect!")
-                print("SSID: {}".format(global_state["command"]["ssid"]))
-                print("Password: {}".format(global_state["command"]["password"]))
-                print("Hotspot?: {}".format(global_state["command"]["hotspot"]))
+                # Make sure we're authorized, do nothing if we're not.
+                if global_state["state"] == IMPROV_STATE_AUTHORIZED_BYTES:
+                    set_state_via_timeout = False  # don't change the state later, we're handling a command.
+                    print("Will connect!")
+                    print("SSID: {}".format(global_state["command"]["ssid"]))
+                    print("Password length: {}".format(len(global_state["command"]["password"])))
+                    print("Hotspot?: {}".format(global_state["command"]["hotspot"]))
 
-                # Mark global state as hotspot if such is the case.
-                global_state["connect_hotspot"] = global_state["command"]["hotspot"]
+                    # Mark global state as hotspot if such is the case.
+                    global_state["connect_hotspot"] = global_state["command"]["hotspot"]
 
-                # Do the actual provisioning...
-                await do_connect(global_state["command"]["ssid"], global_state["command"]["password"])
+                    # Do the actual provisioning...
+                    await do_connect(global_state["command"]["ssid"], global_state["command"]["password"])
 
-                # Send the "provisioning" notification...
-                global_state["state"] = IMPROV_STATE_PROVISIONING_BYTES
+                    # Send the "provisioning" notification...
+                    global_state["state"] = IMPROV_STATE_PROVISIONING_BYTES
 
-                # Mark operation as doing something, so we report status on the next loop.
-                global_state["operation"] = "provisioning"
-                global_state["loops_after_provisioning_started"] = 0
+                    # Mark operation as doing something, so we report status on the next loop.
+                    global_state["operation"] = "provisioning"
+                    global_state["loops_after_provisioning_started"] = 0
+                else:
+                    print("Got command to connect, but not authorized!")
+                    global_state["error"] = IMPROV_ERROR_NOT_AUTHORIZED_BYTES
+                    global_state["reset_status_after_counter"] = global_state["counter"] + 3  # Change back after 3s
 
             global_state["command"] = IMPROV_NO_COMMAND
+
+        # Default set state to lock provisioning after the timeout.
+        if set_state_via_timeout:
+            global_state["state"] = get_authorized_or_await_based_on_counter()
+        else:
+            print("Not setting state via timeout ({}): {}".format(global_state["counter"], global_state["state"]))
 
         # Publish changed attributes as notifications, but only when they actually changed.
         publish_changed_if_changed("debugging", improv_wifi_service.debugging)
