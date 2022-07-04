@@ -109,7 +109,7 @@ def get_wifi_status(hotspot):
 
 
 def get_wifi_status_raw():
-    logger.info("Getting wifi status")
+    logger.debug("Getting wifi status")
     proc = subprocess.Popen(["/usr/bin/bash", "/usr/local/sbin/improv-status.sh"], shell=False, close_fds=True)
     return_code = proc.wait(timeout=1)  # 2-second timeout to get status
     logger.info("wifi status return code: %s", return_code, extra={"WIFI_STATUS_RETURN_CODE": return_code})
@@ -146,7 +146,7 @@ async def do_connect(ssid, password):
     logger.info("Will connect to wifi SSID '%s' with password length '%s'", ssid, len(password), extra={"SSID": ssid})
     proc = subprocess.Popen(["/usr/bin/bash", "/usr/local/sbin/improv-config.sh", ssid, password], shell=False,
                             close_fds=True)
-    logger.info("return code:", proc.wait())
+    logger.info("return code: %s", proc.wait())
     logger.warning("Done wifi provisioning with SSID '%s' and password length '%s'", ssid, len(password),
                    extra={"SSID": ssid})
 
@@ -325,7 +325,7 @@ async def main():
 
         # Reset the status back to normal after a certain amount of loops.
         if global_state["reset_status_after_counter"] != 0:
-            logger.info("Should reset status after counter: %s, current counter %s",
+            logger.debug("Should reset status after counter: %s, current counter %s",
                         global_state["reset_status_after_counter"], global_state["counter"],
                         extra={"COUNTER": global_state["counter"]})
             if global_state["counter"] > global_state["reset_status_after_counter"]:
@@ -351,7 +351,7 @@ async def main():
                 # Will stay in this state. To reprovision, user will have to reboot.
             else:
                 if global_state["loops_after_provisioning_started"] > 10:
-                    logger.warning("Provisioning failed! (Unable to connect to WiFi)")
+                    logger.error("Provisioning failed! (Unable to connect to WiFi)")
                     global_state["error"] = IMPROV_ERROR_UNABLE_TO_CONNECT_BYTES
                     global_state["operation"] = "none"
                     global_state["reset_status_after_counter"] = global_state["counter"] + 15
@@ -366,13 +366,11 @@ async def main():
                     set_state_via_timeout = False  # don't change the state later, we're handling a command.
                     # but, do give it an extra minute before locking, since we might be over it by a large amount.
                     if global_state["counter"] >= lock_after_counter:
-                        logger.warning("Counter is over limit, giving it and extra minute...")
-                        lock_after_counter = global_state["counter"] + 60
+                        logger.warning("Counter is over limit, giving it an extra minute...")
+                        lock_after_counter = global_state["counter"] + 62
 
-                    logger.info("Will connect!")
-                    logger.info("SSID: '%s'", global_state["command"]["ssid"])
-                    logger.info("Password length: '%s'", len(global_state["command"]["password"]))
-                    logger.info("Hotspot?: '%s'", global_state["command"]["hotspot"])
+                    logger.info("Will connect!",
+                                extra={"COUNTER": global_state["counter"], "SSID": global_state["command"]["ssid"]})
 
                     # Mark global state as hotspot if such is the case.
                     global_state["connect_hotspot"] = global_state["command"]["hotspot"]
@@ -399,13 +397,19 @@ async def main():
                 # Get file name from PROVISION_CONFIG_FILE - If it does NOT exist, we've never been provisioned, so no
                 if (os.environ.get('PROVISION_CONFIG_FILE')) is not None:
                     if os.path.exists(os.environ.get('PROVISION_CONFIG_FILE')):
-                        logger.info("PROVISION_CONFIG_FILE exists. counter: %s, lock_after_counter: %s",
-                                    global_state["counter"], lock_after_counter)
+                        if global_state["counter"] % 60 == 0:
+                            logger.debug("PROVISION_CONFIG_FILE exists. counter: %s, lock_after_counter: %s",
+                                         global_state["counter"], lock_after_counter)
                         if global_state["counter"] > lock_after_counter:
                             logger.warning("Counter is over limit, LOCKING...")
                             if os.environ.get("NOTIFY_SOCKET") is not None:
                                 notify(Notification.STATUS, "Working, but LOCKED.")
                             global_state["state"] = IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES
+                    else:
+                        if global_state["counter"] % 60 == 0:
+                            logger.debug("PROVISION_CONFIG_FILE does not exist, won't lock. counter: %s",
+                                         global_state["counter"], lock_after_counter)
+
         else:
             logger.info("Not setting state via timeout (%s): %s", global_state["counter"], global_state["state"])
 
@@ -422,5 +426,7 @@ async def main():
     await bus.wait_for_disconnect()
 
 
-if __name__ == "__main__":
+try:
     asyncio.run(main())
+except Exception as e:
+    logger.exception("main exception", exc_info=e)
