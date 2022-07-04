@@ -72,7 +72,8 @@ previous_state = {
     "debugging": None
 }
 
-lock_after_counter = (60 * 5)  # 5 Minutes...
+timeout_logger_modulo = 60
+lock_after_counter = (5 * 60)  # 5 Minutes...
 
 
 def publish_changed_if_changed(key, notifier):
@@ -326,8 +327,8 @@ async def main():
         # Reset the status back to normal after a certain amount of loops.
         if global_state["reset_status_after_counter"] != 0:
             logger.debug("Should reset status after counter: %s, current counter %s",
-                        global_state["reset_status_after_counter"], global_state["counter"],
-                        extra={"COUNTER": global_state["counter"]})
+                         global_state["reset_status_after_counter"], global_state["counter"],
+                         extra={"COUNTER": global_state["counter"]})
             if global_state["counter"] > global_state["reset_status_after_counter"]:
                 logger.warning("Resetting status after counter: %s", global_state["counter"],
                                extra={"COUNTER": global_state["counter"]})
@@ -393,25 +394,32 @@ async def main():
 
         # Default set state to lock provisioning after the timeout.
         if set_state_via_timeout:
-            if global_state["state"] == IMPROV_STATE_AUTHORIZED_BYTES:  # only if not already locked..
-                # Get file name from PROVISION_CONFIG_FILE - If it does NOT exist, we've never been provisioned, so no
-                if (os.environ.get('PROVISION_CONFIG_FILE')) is not None:
-                    if os.path.exists(os.environ.get('PROVISION_CONFIG_FILE')):
-                        if global_state["counter"] % 60 == 0:
-                            logger.debug("PROVISION_CONFIG_FILE exists. counter: %s, lock_after_counter: %s",
-                                         global_state["counter"], lock_after_counter)
-                        if global_state["counter"] > lock_after_counter:
-                            logger.warning("Counter is over limit, LOCKING...")
-                            if os.environ.get("NOTIFY_SOCKET") is not None:
-                                notify(Notification.STATUS, "Working, but LOCKED.")
-                            global_state["state"] = IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES
-                    else:
-                        if global_state["counter"] % 60 == 0:
-                            logger.debug("PROVISION_CONFIG_FILE does not exist, won't lock. counter: %s",
-                                         global_state["counter"], lock_after_counter)
+            new_state = IMPROV_STATE_AUTHORIZED_BYTES  # by default unlocked.
+
+            # Get file name from PROVISION_CONFIG_FILE - If it does NOT exist, we've never been provisioned, so no
+            if os.path.exists(os.environ.get('PROVISION_CONFIG_FILE')):
+
+                if global_state["counter"] % timeout_logger_modulo == 0:
+                    logger.debug("PROVISION_CONFIG_FILE exists. counter: %s, lock_after_counter: %s",
+                                 global_state["counter"], lock_after_counter)
+
+                if global_state["counter"] > lock_after_counter:
+                    new_state = IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES  # locked!
+
+                    # log it only once, otherwise, we'll flood the logs.
+                    if global_state["state"] != new_state:
+                        logger.warning("Counter is over limit, LOCKED...")
+                        if os.environ.get("NOTIFY_SOCKET") is not None:
+                            notify(Notification.STATUS, "Working, but LOCKED.")
+            else:
+                if global_state["counter"] % timeout_logger_modulo == 0:
+                    logger.debug("PROVISION_CONFIG_FILE does not exist, won't lock. counter: %s",
+                                 global_state["counter"])
+
+            global_state["state"] = new_state
 
         else:
-            logger.info("Not setting state via timeout (%s): %s", global_state["counter"], global_state["state"])
+            logger.debug("Not setting state via timeout (%s): %s", global_state["counter"], global_state["state"])
 
         # Publish changed attributes as notifications, but only when they actually changed.
         publish_changed_if_changed("debugging", improv_wifi_service.debugging)
@@ -427,6 +435,8 @@ async def main():
 
 
 try:
+    if (os.environ.get('PROVISION_CONFIG_FILE')) is None:
+        raise Exception("PROVISION_CONFIG_FILE environment variable not set")
     asyncio.run(main())
 except Exception as e:
     logger.exception("main exception", exc_info=e)
