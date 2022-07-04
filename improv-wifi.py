@@ -54,12 +54,7 @@ previous_state = {
     "debugging": None
 }
 
-
-def get_authorized_or_await_based_on_counter():
-    global global_state
-    if global_state["counter"] > (60 * 5):  # 5 Minutes...
-        return IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES
-    return IMPROV_STATE_AUTHORIZED_BYTES
+lock_after_counter = (60 * 5)  # 5 Minutes...
 
 
 def publish_changed_if_changed(key, notifier):
@@ -289,6 +284,7 @@ async def main():
     print("Advertisement registered")
 
     global global_state
+    global lock_after_counter
 
     improv_wifi_service.error_state.changed(global_state["error"])
     improv_wifi_service.current_state.changed(global_state["state"])
@@ -340,6 +336,11 @@ async def main():
                 # Make sure we're authorized, do nothing if we're not.
                 if global_state["state"] == IMPROV_STATE_AUTHORIZED_BYTES:
                     set_state_via_timeout = False  # don't change the state later, we're handling a command.
+                    # but, do give it an extra minute before locking, since we might be over it by a large amount.
+                    if global_state["counter"] >= lock_after_counter:
+                        print("Counter is over limit, giving it and extra minute...")
+                        lock_after_counter = global_state["counter"] + 60
+
                     print("Will connect!")
                     print("SSID: {}".format(global_state["command"]["ssid"]))
                     print("Password length: {}".format(len(global_state["command"]["password"])))
@@ -366,7 +367,15 @@ async def main():
 
         # Default set state to lock provisioning after the timeout.
         if set_state_via_timeout:
-            global_state["state"] = get_authorized_or_await_based_on_counter()
+            if global_state["state"] == IMPROV_STATE_AUTHORIZED_BYTES:  # only if not already locked..
+                # Get file name from PROVISION_CONFIG_FILE - If it does NOT exist, we've never been provisioned, so no
+                if (os.environ.get('PROVISION_CONFIG_FILE')) is not None:
+                    if os.path.exists(os.environ.get('PROVISION_CONFIG_FILE')):
+                        print("PROVISION_CONFIG_FILE exists. counter: {}, lock_after_counter: {}".format(
+                            global_state["counter"], lock_after_counter))
+                        if global_state["counter"] > lock_after_counter:
+                            print("Counter is over limit, LOCKING...")
+                            global_state["state"] = IMPROV_STATE_AWAIT_AUTHORIZATION_BYTES
         else:
             print("Not setting state via timeout ({}): {}".format(global_state["counter"], global_state["state"]))
 
