@@ -198,7 +198,7 @@ class ImprovWifiService(Service):
 
     @characteristic("BABE", CharFlags.READ)
     def machine_uuid(self, options):
-        with open("/etc/machine.uuid") as f:  # @TODO: use systemd machine ID instead.
+        with open(os.environ.get('UUID_FILE')) as f:
             uuid = f.read().rstrip("\n")
         return bytes(uuid, "utf-8")
 
@@ -437,6 +437,8 @@ async def main():
 try:
     if (os.environ.get('PROVISION_CONFIG_FILE')) is None:
         raise Exception("PROVISION_CONFIG_FILE environment variable not set")
+    if (os.environ.get('UUID_FILE')) is None:
+        raise Exception("UUID_FILE environment variable not set")
     asyncio.run(main())
 except Exception as e:
     logger.exception("main exception", exc_info=e)
